@@ -29,3 +29,6 @@ Known bugs:
 - Is not happy on AMD right now.
 - Will not do AVX2 on MacOS
 
+Donations appreciated:
+ - PTS: Pr8cnhz5eDsUegBZD4VZmGDARcKaozWbBc
+ - BTC: 17sb5mcCnnt4xH3eEkVi6kHvhzQRjPRBtS
