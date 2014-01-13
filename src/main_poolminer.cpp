@@ -205,7 +205,7 @@ public:
 			void *addr;
 			addr = mmap(0, bigbufsize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB, 0, 0);
 			if (addr == MAP_FAILED) {
-			  perror("Could not mmap hugepage, reverting to malloc");
+                          printf("Couldn't use the hugepage speed optimization.  Enable huge pages for a slight speed boost.\n");
 			  _collisionMap = (uint32_t*)malloc(sizeof(uint32_t)*(1 << COLLISION_TABLE_BITS));
 			} else {
 			  madvise(addr, bigbufsize, MADV_RANDOM);
