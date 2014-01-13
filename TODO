@@ -1,0 +1,4 @@
+- Right now the client switches modes (dev/user) whenever it
+  disconnects.  On a really flaky network, this could lead to
+  excessive dev-mining.  Fix.
+
