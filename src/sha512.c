@@ -168,8 +168,14 @@ Init_SHA512_avx ()
 void
 Init_SHA512_avx2()
 {
+#ifdef __APPLE__
+  /* Sorry ... */
+  sha512_update_func = sha512_avx;
+  sha512_update_single_func = sha512_avx_single;
+#else
 	sha512_update_func = sha512_transform_rorx;
 	sha512_update_single_func = sha512_transform_single_rorx;
+#endif
 }
 
 void

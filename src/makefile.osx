@@ -68,9 +68,6 @@ OBJS= \
 
 all: ptsminer
 
-obj/sha512_avx2.o:
-	$(CC) -c -O3 intel/sha512_avx2.S -o obj/sha512_avx2.o
-
 obj/%.o: %.cpp %.hpp
 	$(CXX) $(CFLAGS) -c -O2 $(DEBUGFLAGS) $(xCOMPILEFLAGS) -o $@ $<
 obj/sph_%.o: sph_%.c
