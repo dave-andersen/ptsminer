@@ -22,6 +22,7 @@
  * moinakg@belenix.org, http://moinakg.wordpress.com/
  *      
  */
+#include <stdio.h>
 
 /*-
  * Copyright (c) 2001-2003 Allan Saddi <allan@saddi.com>
@@ -155,17 +156,27 @@ static const uint64_t iv256[SHA512_HASH_WORDS] = {
 };
 
 static update_func_ptr sha512_update_func;
+static update_func_ptr sha512_update_single_func;
 
 void
 Init_SHA512_avx ()
 {
-	sha512_update_func = sha512_avx;
+  sha512_update_func = sha512_avx;
+  sha512_update_single_func = sha512_avx_single;
+}
+
+void
+Init_SHA512_avx2()
+{
+	sha512_update_func = sha512_transform_rorx;
+	sha512_update_single_func = sha512_transform_single_rorx;
 }
 
 void
 Init_SHA512_sse4 ()
 {
 	sha512_update_func = sha512_sse4;
+	sha512_update_single_func = sha512_sse4;
 }
 
 static void
@@ -244,6 +255,67 @@ SHA512_Update (SHA512_Context *sc, const void *vdata, size_t len)
 	}
 }
 
+void
+SHA512_Mid_Update (SHA512_Context *sc, const void *vdata, size_t len)
+{
+	const uint8_t *data = (const uint8_t *)vdata;
+	uint32_t bufferBytesLeft;
+	size_t bytesToCopy;
+	int rem;
+	uint64_t carryCheck;
+
+	if (sc->bufferLength) {
+		do {
+			bufferBytesLeft = SHA512_BLOCK_SIZE - sc->bufferLength;
+			bytesToCopy = bufferBytesLeft;
+			if (bytesToCopy > len)
+				bytesToCopy = len;
+
+			memcpy (&sc->buffer.bytes[sc->bufferLength], data, bytesToCopy);
+			carryCheck = sc->totalLength[1];
+			sc->totalLength[1] += bytesToCopy * 8L;
+			if (sc->totalLength[1] < carryCheck)
+				sc->totalLength[0]++;
+
+			sc->bufferLength += bytesToCopy;
+			data += bytesToCopy;
+			len -= bytesToCopy;
+
+			if (sc->bufferLength == SHA512_BLOCK_SIZE) {
+				sc->blocks = 1;
+				sha512_update_func(sc->buffer.words, sc->hash, sc->blocks);
+				printf("midupdate called update func\n");
+				sc->bufferLength = 0L;
+			} else {
+				return;
+			}
+		} while (len > 0 && len <= SHA512_BLOCK_SIZE);
+		if (!len) return;
+	}
+
+	sc->blocks = len >> 7;
+	rem = len - (sc->blocks << 7);
+	len = sc->blocks << 7;
+	carryCheck = sc->totalLength[1];
+	sc->totalLength[1] += rem * 8L;
+	if (sc->totalLength[1] < carryCheck)
+		sc->totalLength[0]++;
+
+	if (len) {
+		carryCheck = sc->totalLength[1];
+		sc->totalLength[1] += len * 8L;
+		if (sc->totalLength[1] < carryCheck)
+			sc->totalLength[0]++;
+				printf("midupdate called update func 2\n");
+		sha512_update_func((uint32_t *)data, sc->hash, sc->blocks);
+	}
+	if (rem) {
+		memcpy (&sc->buffer.bytes[0], data + len, rem);
+		sc->bufferLength = rem;
+	}
+}
+
+
 static void
 _final (SHA512_Context *sc, uint8_t *hash, int hashWords, int halfWord)
 {
@@ -279,4 +351,65 @@ void
 SHA512_Final (SHA512_Context *sc, uint8_t hash[SHA512_HASH_SIZE])
 {
 	_final (sc, hash, SHA512_HASH_WORDS, 0);
+}
+
+inline void
+SHA512_Update_Simple (SHA512_Context *sc, const void *vdata, size_t len)
+{
+	const uint8_t *data = (const uint8_t *)vdata;
+	uint32_t bufferBytesLeft;
+	size_t bytesToCopy;
+
+	bufferBytesLeft = SHA512_BLOCK_SIZE - sc->bufferLength;
+	bytesToCopy = bufferBytesLeft;
+	if (bytesToCopy > len) {
+	  // btc = 92, len = 76 for first call
+	  bytesToCopy = len;
+	}
+	
+	memcpy (&sc->buffer.bytes[sc->bufferLength], data, bytesToCopy);
+	sc->totalLength[1] += bytesToCopy * 8L;
+	
+	sc->bufferLength += bytesToCopy;
+	data += bytesToCopy;
+	len -= bytesToCopy;
+}
+
+
+static const uint8_t finalpad[92] = {
+0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,  /* 64 */
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,  /* 72 */
+0x0, 0x0, 0x0, 0x0, /* 76 */
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,  /* 84 */
+0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x20 /* 92 */
+};
+
+void
+SHA512_PreFinal (SHA512_Context *sc)
+{
+	SHA512_Update_Simple (sc, finalpad, 92);
+
+	sc->blocks = 1;
+}
+
+void
+SHA512_Final_Shift (SHA512_Context *sc, uint32_t pokeval, uint8_t hash[SHA512_HASH_SIZE])
+{
+  memcpy (&sc->buffer.bytes[0], &pokeval, 4);
+
+  sha512_update_single_func(sc->buffer.words, sc->hash, 1);
+  
+  uint64_t *hash64 = (uint64_t *)hash;
+  
+  for (int i = 0; i < 8; i++) {
+    hash64[i] = (BYTESWAP64(sc->hash[i]));
+    sc->hash[i] = iv512[i];
+  }
 }

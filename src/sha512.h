@@ -76,11 +76,16 @@ extern "C" {
 #endif
 
 void Init_SHA512_avx();
+void Init_SHA512_avx2();
 void Init_SHA512_sse4();
 
 void SHA512_Init (SHA512_Context *sc);
 void SHA512_Update (SHA512_Context *sc, const void *data, size_t len);
 void SHA512_Final (SHA512_Context *sc, uint8_t hash[SHA512_HASH_SIZE]);
+  //void SHA512_Final_Shift (SHA512_Context *sc, uint8_t hash[SHA512_HASH_SIZE]);
+void SHA512_Mid_Update (SHA512_Context *sc, const void *vdata, size_t len);
+void SHA512_Final_Shift (SHA512_Context *sc, uint32_t pokeval, uint8_t hash[SHA512_HASH_SIZE]);
+void SHA512_PreFinal (SHA512_Context *sc);
 
 /*
  * Intel's optimized SHA512 core routines. These routines are described in an
@@ -90,6 +95,9 @@ void SHA512_Final (SHA512_Context *sc, uint8_t hash[SHA512_HASH_SIZE]);
  */
 extern void sha512_sse4(const void *input_data, void *digest, uint64_t num_blks);
 extern void sha512_avx(const void *input_data, void *digest, uint64_t num_blks);
+extern void sha512_avx_single(const void *input_data, void *digest, uint64_t num_blks);
+extern void sha512_transform_rorx(const void *input_data, void *digest, uint64_t num_blks);
+extern void sha512_transform_single_rorx(const void *input_data, void *digest, uint64_t num_blks);
 
 #ifdef __cplusplus
 }

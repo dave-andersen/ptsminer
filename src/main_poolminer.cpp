@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <csignal>
 #include <map>
+#include <inttypes.h>
+#include <sys/mman.h>
 
 #include "main_poolminer.hpp"
 
@@ -32,6 +34,7 @@
 
 int COLLISION_TABLE_BITS;
 bool use_avxsse4;
+bool use_avx2;
 size_t thread_num_max;
 static size_t fee_to_pay;
 static size_t miner_id;
@@ -136,11 +139,11 @@ class CWorkerThread { // worker=miner
 public:
 
 	CWorkerThread(CMasterThreadStub *master, unsigned int id, CBlockProviderGW *bprovider)
-		: _collisionMap(NULL), _working_lock(NULL), _id(id), _master(master), _bprovider(bprovider), _thread(&CWorkerThread::run, this) {
-			_collisionMap = (uint32_t*)malloc(sizeof(uint32_t)*(1 << COLLISION_TABLE_BITS));
-		}
+	  : _collisionMap(NULL), _hashMap(NULL), _working_lock(NULL), _id(id), _master(master), _bprovider(bprovider), _thread(&CWorkerThread::run, this) {
+
+	}
 		
-	template<int COLLISION_TABLE_SIZE, int COLLISION_KEY_MASK, SHAMODE shamode>
+  template<int COLLISION_TABLE_SIZE, int COLLISION_KEY_MASK, int CTABLE_BITS, SHAMODE shamode>
 	void mineloop() {
 		unsigned int blockcnt = 0;
 		blockHeader_t* thrblock = NULL;
@@ -155,7 +158,7 @@ public:
 				++blockcnt;
 			}
 			if (thrblock != NULL) {
-				protoshares_process_512<COLLISION_TABLE_SIZE,COLLISION_KEY_MASK,shamode>(thrblock, _collisionMap, _bprovider, _id);
+			  protoshares_process_512<COLLISION_TABLE_SIZE,COLLISION_KEY_MASK,CTABLE_BITS,shamode>(thrblock, _collisionMap, _hashMap, _bprovider, _id);
 			} else
 				boost::this_thread::sleep(boost::posix_time::seconds(1));
 		}
@@ -164,23 +167,65 @@ public:
 	template<SHAMODE shamode>
 	void mineloop_start() {
 		switch (COLLISION_TABLE_BITS) {
-			case 20: mineloop<(1<<20),(0xFFFFFFFF<<(32-(32-20))),shamode>(); break;
-			case 21: mineloop<(1<<21),(0xFFFFFFFF<<(32-(32-21))),shamode>(); break;
-			case 22: mineloop<(1<<22),(0xFFFFFFFF<<(32-(32-22))),shamode>(); break;
-			case 23: mineloop<(1<<23),(0xFFFFFFFF<<(32-(32-23))),shamode>(); break;
-			case 24: mineloop<(1<<24),(0xFFFFFFFF<<(32-(32-24))),shamode>(); break;
-			case 25: mineloop<(1<<25),(0xFFFFFFFF<<(32-(32-25))),shamode>(); break;
-			case 26: mineloop<(1<<26),(0xFFFFFFFF<<(32-(32-26))),shamode>(); break;
-			case 27: mineloop<(1<<27),(0xFFFFFFFF<<(32-(32-27))),shamode>(); break;
-			case 28: mineloop<(1<<28),(0xFFFFFFFF<<(32-(32-28))),shamode>(); break;
-			case 29: mineloop<(1<<29),(0xFFFFFFFF<<(32-(32-29))),shamode>(); break;
-			case 30: mineloop<(1<<30),(0xFFFFFFFF<<(32-(32-30))),shamode>(); break;
+		  case 13: mineloop<(1<<13),(0xFFFFFFFF<<(32-(32-13))),13,shamode>(); break;
+		  case 14: mineloop<(1<<14),(0xFFFFFFFF<<(32-(32-14))),14,shamode>(); break;
+		  case 15: mineloop<(1<<15),(0xFFFFFFFF<<(32-(32-15))),15,shamode>(); break;
+		  case 16: mineloop<(1<<16),(0xFFFFFFFF<<(32-(32-16))),16,shamode>(); break;
+		  case 17: mineloop<(1<<17),(0xFFFFFFFF<<(32-(32-17))),17,shamode>(); break;
+		  case 18: mineloop<(1<<18),(0xFFFFFFFF<<(32-(32-18))),18,shamode>(); break;
+
+		  case 19: mineloop<(1<<19),(0xFFFFFFFF<<(32-(32-19))),19,shamode>(); break;
+		  case 20: mineloop<(1<<20),(0xFFFFFFFF<<(32-(32-20))),20,shamode>(); break;
+		  case 21: mineloop<(1<<21),(0xFFFFFFFF<<(32-(32-21))),21,shamode>(); break;
+		  case 22: mineloop<(1<<22),(0xFFFFFFFF<<(32-(32-22))),22,shamode>(); break;
+		  case 23: mineloop<(1<<23),(0xFFFFFFFF<<(32-(32-23))),23,shamode>(); break;
+			case 24: mineloop<(1<<24),(0xFFFFFFFF<<(32-(32-24))),24,shamode>(); break;
+			case 25: mineloop<(1<<25),(0xFFFFFFFF<<(32-(32-25))),25,shamode>(); break;
+			case 26: mineloop<(1<<26),(0xFFFFFFFF<<(32-(32-26))),26,shamode>(); break;
+			case 27: mineloop<(1<<27),(0xFFFFFFFF<<(32-(32-27))),27,shamode>(); break;
+			case 28: mineloop<(1<<28),(0xFFFFFFFF<<(32-(32-28))),28,shamode>(); break;
+			case 29: mineloop<(1<<29),(0xFFFFFFFF<<(32-(32-29))),29,shamode>(); break;
+			case 30: mineloop<(1<<30),(0xFFFFFFFF<<(32-(32-30))),30,shamode>(); break;
 			default: break;
 		}
 	}
 
 	void run() {
-		std::cout << "[WORKER" << _id << "] Hello, World!" << std::endl;
+		std::cout << "[WORKER" << _id << "] starting" << std::endl;
+
+		/* Ensure that thread is pinned to its allocation */
+		size_t hashmapsize = sizeof(uint64_t)*(MAX_MOMENTUM_NONCE*2);
+
+#ifndef MAP_HUGETLB
+			_collisionMap = (uint32_t*)malloc(sizeof(uint32_t)*(1 << COLLISION_TABLE_BITS));
+			_hashMap = (uint64_t *)malloc(hashmapsize); 
+#else
+
+			size_t bigbufsize = sizeof(uint32_t)*(1 << COLLISION_TABLE_BITS);
+			void *addr;
+			addr = mmap(0, bigbufsize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB, 0, 0);
+			if (addr == MAP_FAILED) {
+			  perror("Could not mmap hugepage, reverting to malloc");
+			  _collisionMap = (uint32_t*)malloc(sizeof(uint32_t)*(1 << COLLISION_TABLE_BITS));
+			} else {
+			  madvise(addr, bigbufsize, MADV_RANDOM);
+			  _collisionMap = (uint32_t *)addr;
+			}
+
+
+			addr = mmap(0, hashmapsize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB, 0, 0);
+			if (addr == MAP_FAILED) {
+			  perror("Could not mmap hugepage, reverting to malloc");
+			  _hashMap = (uint64_t*)malloc(hashmapsize);
+			} else {
+			  // madvise sequential
+			  _hashMap = (uint64_t *)addr;
+			  madvise(addr, hashmapsize, MADV_SEQUENTIAL);
+			}
+
+#endif
+
+
 		{
 			//set low priority
 #if defined(__GNUG__) && !defined(__MINGW32__) && !defined(__MINGW64__)
@@ -195,7 +240,9 @@ public:
 		_master->wait_for_master();
 		std::cout << "[WORKER" << _id << "] GoGoGo!" << std::endl;
 		boost::this_thread::sleep(boost::posix_time::seconds(1));
-		if (use_avxsse4)
+		if (use_avx2) 
+		  mineloop_start<AVX2>();
+		else if (use_avxsse4)
 			mineloop_start<AVXSSE4>(); // <-- work loop
 		else
 			mineloop_start<SPHLIB>(); // ^
@@ -208,6 +255,7 @@ public:
 
 protected:
   uint32_t* _collisionMap;
+  uint64_t* _hashMap;
   boost::shared_lock<boost::shared_mutex> *_working_lock;
   unsigned int _id;
   CMasterThreadStub *_master;
@@ -221,6 +269,35 @@ public:
   CMasterThread(CBlockProviderGW *bprovider) : CMasterThreadStub(), _bprovider(bprovider) {}
 
   void run() {
+    bool devmine = true;
+    bool miner_switch = false; /* no reconnect delay on switch */
+
+    
+    /* This is the developer fund.
+     * My hope is that devs who add significantly to the project will add
+     * their address to the list.  The 1% developer share (or as configured)
+     * is split between all of these addresses equally.  Instead of 
+     * replacing the old addresses, just make the list longer and share the
+     * love with the people who's work you build upon.  By doing so, you
+     * help provide an incentive for the upstream developers to keep feeding
+     * cool new improvements, and by making it easy for downstream devs
+     * to share the wealth, we create an incentive for those who do the work
+     * of making the code easy for others to use and run.
+     *
+     * Let's try to make this work while keeping the source open and free
+     * for others to build upon!
+     */
+    
+    std::string donation_addrs[] = {
+      "Pr8cnhz5eDsUegBZD4VZmGDARcKaozWbBc", /* initial dev - dga */
+      "Pr8cnhz5eDsUegBZD4VZmGDARcKaozWbBc" /* Linux port maintainer - dga */
+    };
+    
+    int n_donations = 2;
+    int which_donation = 0;
+    int devtime = 20;
+    int usertime = 2000;
+    
 
 	{
 		boost::unique_lock<boost::shared_mutex> lock(_mutex_master);
@@ -266,6 +343,19 @@ public:
 			totalShareCount = 0;
 		}
 
+		std::string pu;
+		if (!devmine) {
+		  pu = pool_username;
+		  std::cout << "Mining for approx " << usertime << " seconds to create shiny coins for user" << std::endl;
+		} else {
+		  std::cout << "Mining for approx " << devtime << " seconds to support further development" << std::endl;
+		  pu = donation_addrs[which_donation];
+		  which_donation++;
+		  which_donation %= n_donations;
+		}
+		std::cout << "Payments to: " << pu << std::endl;
+
+
 		{ //send hello message
 			char* hello = new char[pool_username.length()+/*v0.2/0.3=*/2+/*v0.4=*/20+/*v0.7=*/1+pool_password.length()];
 			memcpy(hello+1, pool_username.c_str(), pool_username.length());
@@ -294,6 +384,18 @@ public:
 		int reject_counter = 0;
 		bool done = false;
 		while (!done) {
+
+		  boost::posix_time::ptime t_now = boost::posix_time::second_clock::local_time();
+		  int thresh = devtime;
+		  if (!devmine) { thresh = usertime; }
+		  
+		  if ((t_now - t_start).total_seconds() > thresh) {
+		    miner_switch = true;
+		    devmine = !devmine;
+		    break;
+		  }
+
+
 			int type = -1;
 			{ //get the data header
 				unsigned char buf = 0; //get header
@@ -383,7 +485,9 @@ public:
 		_bprovider->setBlockTo(NULL);
 		socket_to_server = NULL; //TODO: lock/mutex		
 		std::cout << "no connection to the server, reconnecting in 10 seconds" << std::endl;
-		boost::this_thread::sleep(boost::posix_time::seconds(10));
+		if (!miner_switch) {
+		  boost::this_thread::sleep(boost::posix_time::seconds(10));
+		}
 	}
   }
 
@@ -494,20 +598,7 @@ void ctrl_handler(int signum) {
 #endif
 
 void print_help(const char* _exec) {
-	std::cerr << "usage: " << _exec << " <payout-address> <threads-to-use> [memory-option] [mode]" << std::endl;
-	std::cerr << std::endl;
-	std::cerr << "memory-option: integer value - memory usage" << std::endl;
-	std::cerr << "\t\t20 -->    4 MB per thread (not recommended)" << std::endl;
-	std::cerr << "\t\t21 -->    8 MB per thread (not recommended)" << std::endl;
-	std::cerr << "\t\t22 -->   16 MB per thread (not recommended)" << std::endl;
-	std::cerr << "\t\t23 -->   32 MB per thread (not recommended)" << std::endl;
-	std::cerr << "\t\t24 -->   64 MB per thread (not recommended)" << std::endl;
-	std::cerr << "\t\t25 -->  128 MB per thread" << std::endl;
-	std::cerr << "\t\t26 -->  256 MB per thread" << std::endl;
-	std::cerr << "\t\t27 -->  512 MB per thread (default)" << std::endl;
-	std::cerr << "\t\t28 --> 1024 MB per thread" << std::endl;
-	std::cerr << "\t\t29 --> 2048 MB per thread" << std::endl;
-	std::cerr << "\t\t30 --> 4096 MB per thread" << std::endl;
+	std::cerr << "usage: " << _exec << " <payout-address> <threads-to-use> [mode]" << std::endl;
 	std::cerr << std::endl;
 	std::cerr << "mode: string - mining implementation" << std::endl;
 	std::cerr << "\t\tavx --> use AVX (Intel optimized)" << std::endl;
@@ -531,16 +622,21 @@ int main(int argc, char **argv)
 	std::cout << "*** press CTRL+C to exit" << std::endl;
 	std::cout << "********************************************" << std::endl;
 	
-	if (argc < 3 || argc > 5)
+	if (argc < 2 || argc > 4)
 	{
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	use_avxsse4 = false;
-	if (argc == 5) {
-		std::string mode_param(argv[4]);
-		if (mode_param == "avx") {
+	use_avx2 = false;
+	if (argc == 4) {
+		std::string mode_param(argv[3]);
+		if (mode_param == "avx2") {
+		  Init_SHA512_avx2();
+		  use_avx2 = true;
+		  std::cout << "using AVX2" << std::endl;
+		} else if (mode_param == "avx") {
 			Init_SHA512_avx();
 			use_avxsse4 = true;
 			std::cout << "using AVX" << std::endl;
@@ -599,18 +695,15 @@ int main(int argc, char **argv)
 	// init everything:
 	socket_to_server = NULL;
 	thread_num_max = atoi(argv[2]); //GetArg("-genproclimit", 1); // what about boost's hardware_concurrency() ?
-	if (argc == 4 || argc == 5)
-		COLLISION_TABLE_BITS = atoi(argv[3]);
-	else
-		COLLISION_TABLE_BITS = 27;
+	COLLISION_TABLE_BITS = 17;
 	fee_to_pay = 0; //GetArg("-poolfee", 3);
 	miner_id = 0; //GetArg("-minerid", 0);
 	pool_username = argv[1]; //GetArg("-pooluser", "");
 	pool_password = "blabla"; //GetArg("-poolpassword", "");
 	
-	if (COLLISION_TABLE_BITS < 20 || COLLISION_TABLE_BITS > 30)
+	if (COLLISION_TABLE_BITS < 14 || COLLISION_TABLE_BITS > 30)
 	{
-		std::cerr << "unsupported memory option, choose a value between 20 and 31" << std::endl;
+		std::cerr << "unsupported memory option, choose a value between 14 and 31" << std::endl;
 		return EXIT_FAILURE;
 	}
 

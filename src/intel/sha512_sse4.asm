@@ -286,6 +286,8 @@ endstruc
 ; L is the message length in SHA512 blocks.
 global sha512_sse4:function
 sha512_sse4:
+global _sha512_sse4:function
+_sha512_sse4:
 	cmp msglen, 0
 	je .nowork
 	

@@ -283,6 +283,8 @@ endstruc
 ; L is the message length in SHA512 blocks
 global sha512_avx:function
 sha512_avx:
+global _sha512_avx:function
+_sha512_avx:
 	cmp	msglen, 0
 	je	.nowork
 	
@@ -389,6 +391,117 @@ sha512_avx:
 .nowork:
 	ret
 
+;;; ;;;;;;;;;;;;;;;;;;;;;;;;
+;;  specialized version for one iteration.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; void sha512_avx_single(const void* M, void* D, uint64_t L);
+; Purpose: Updates the SHA512 digest stored at D with the message stored in M.
+; The size of the message pointed to by M must be an integer multiple of SHA512
+;   message blocks.
+; L is the message length in SHA512 blocks
+global sha512_avx_single:function
+sha512_avx_single:
+global _sha512_avx_single:function
+_sha512_avx_single:
+	
+	; Allocate Stack Space
+	sub	rsp, frame_size
+
+	; Save GPRs
+	mov	[rsp + frame.GPRSAVE + 8 * 0], rbx
+	mov	[rsp + frame.GPRSAVE + 8 * 1], r12
+	mov	[rsp + frame.GPRSAVE + 8 * 2], r13
+	mov	[rsp + frame.GPRSAVE + 8 * 3], r14
+	mov	[rsp + frame.GPRSAVE + 8 * 4], r15
+%ifdef WINABI
+	mov	[rsp + frame.GPRSAVE + 8 * 5], rsi
+	mov	[rsp + frame.GPRSAVE + 8 * 6], rdi
+%endif
+	; Save XMMs
+%ifdef WINABI
+	vmovdqa	[rsp + frame.XMMSAVE + 16 * 0], xmm6
+	vmovdqa	[rsp + frame.XMMSAVE + 16 * 1], xmm7
+	vmovdqa	[rsp + frame.XMMSAVE + 16 * 2], xmm8
+	vmovdqa	[rsp + frame.XMMSAVE + 16 * 3], xmm9
+%endif	
+
+.updateblock:
+
+	; Load state variables
+	mov	a_64, [DIGEST(0)]
+	mov	b_64, [DIGEST(1)]
+	mov	c_64, [DIGEST(2)]
+	mov	d_64, [DIGEST(3)]
+	mov	e_64, [DIGEST(4)]
+	mov	f_64, [DIGEST(5)]
+	mov	g_64, [DIGEST(6)]
+	mov	h_64, [DIGEST(7)]
+
+	%assign t 0
+	%rep 80/2 + 1
+	; (80 rounds) / (2 rounds/iteration) + (1 iteration)
+	; +1 iteration because the scheduler leads hashing by 1 iteration
+		%if t < 2
+			; BSWAP 2 QWORDS
+			vmovdqa	xmm1, [XMM_QWORD_BSWAP wrt rip]
+			vmovdqu	xmm0, [MSG(t)]
+			vpshufb	xmm0, xmm0, xmm1     ; BSWAP
+			vmovdqa	[W_t(t)], xmm0       ; Store Scheduled Pair
+			vpaddq	xmm0, xmm0, [K_t(t)] ; Compute W[t]+K[t]
+			vmovdqa	[WK_2(t)], xmm0      ; Store into WK for rounds
+		%elif t < 16
+			; BSWAP 2 QWORDS, Compute 2 Rounds
+			vmovdqu	xmm0, [MSG(t)]
+			vpshufb	xmm0, xmm0, xmm1     ; BSWAP
+			SHA512_Round t - 2           ; Round t-2
+			vmovdqa	[W_t(t)], xmm0       ; Store Scheduled Pair
+			vpaddq	xmm0, xmm0, [K_t(t)] ; Compute W[t]+K[t]
+			SHA512_Round t - 1           ; Round t-1
+			vmovdqa	[WK_2(t)], xmm0      ; W[t]+K[t] into WK
+		%elif t < 79
+			; Schedule 2 QWORDS; Compute 2 Rounds
+			SHA512_2Sched_2Round_avx t
+		%else
+			; Compute 2 Rounds
+			SHA512_Round t - 2
+			SHA512_Round t - 1
+		%endif
+	%assign t t+2
+	%endrep
+
+	; Update digest
+	add	[DIGEST(0)], a_64
+	add	[DIGEST(1)], b_64
+	add	[DIGEST(2)], c_64
+	add	[DIGEST(3)], d_64
+	add	[DIGEST(4)], e_64
+	add	[DIGEST(5)], f_64
+	add	[DIGEST(6)], g_64
+	add	[DIGEST(7)], h_64
+
+	; Restore XMMs
+%ifdef WINABI
+	vmovdqa	xmm6, [rsp + frame.XMMSAVE + 16 * 0]
+	vmovdqa	xmm7, [rsp + frame.XMMSAVE + 16 * 1]
+	vmovdqa	xmm8, [rsp + frame.XMMSAVE + 16 * 2]
+	vmovdqa	xmm9, [rsp + frame.XMMSAVE + 16 * 3]
+%endif
+	; Restore GPRs
+	mov	rbx, [rsp + frame.GPRSAVE + 8 * 0]
+	mov	r12, [rsp + frame.GPRSAVE + 8 * 1]
+	mov	r13, [rsp + frame.GPRSAVE + 8 * 2]
+	mov	r14, [rsp + frame.GPRSAVE + 8 * 3]
+	mov	r15, [rsp + frame.GPRSAVE + 8 * 4]
+%ifdef WINABI
+	mov	rsi, [rsp + frame.GPRSAVE + 8 * 5]
+	mov	rdi, [rsp + frame.GPRSAVE + 8 * 6]
+%endif
+	; Restore Stack Pointer
+	add	rsp, frame_size
+
+	ret
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Binary Data
 
@@ -442,4 +555,10 @@ K512:
 	dq 0x3c9ebe0a15c9bebc,0x431d67c49c100d4c
 	dq 0x4cc5d4becb3e42b6,0x597f299cfc657e2a 
 	dq 0x5fcb6fab3ad6faec,0x6c44198c4a475817
+
+;; IV512:				
+;; 	dq 0x6a09e667f3bcc908,0xbb67ae8584caa73b
+;; 	dq 0x3c6ef372fe94f82b,0xa54ff53a5f1d36f1
+;; 	dq 0x510e527fade682d1,0x9b05688c2b3e6c1f
+;; 	dq 0x1f83d9abfb41bd6b,0x5be0cd19137e2179
 
