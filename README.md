@@ -18,7 +18,8 @@ Features:
 - portable
 
 Build notes:
-you'll need libboost & yasm
+- you'll need libboost & yasm
+- Older versions of gcc may have issues.
 
 Running:
 ptsminer <payment-addr> <#threads> [mode]
