@@ -189,13 +189,12 @@ bool protoshares_revalidateCollision(blockHeader_t* block, uint8_t* midHash, uin
 }
 
 
-inline void put_hash_in_bucket(uint64_t hashval, uint64_t *hashMap, uint32_t *hashCounts, uint32_t nonce) {
+inline void put_hash_in_bucket(uint64_t hashval, uint64_t *hashMap, uint32_t *hashOffsets, uint32_t nonce) {
   uint32_t bin = (hashval >> (64 - SEARCH_SPACE_BITS)) % NUM_PARTITIONS;
   hashval &= ~(MAX_MOMENTUM_NONCE-1);
   hashval |= nonce;
-  uint32_t bin_offset = (bin*(MAX_MOMENTUM_NONCE/NUM_PARTITIONS))*PARTITION_START_OFFSET;
-  hashMap[bin_offset + hashCounts[bin]] = hashval;
-  hashCounts[bin]++;
+  hashMap[hashOffsets[bin]] = hashval;
+  hashOffsets[bin]++;
 }
 
 double timeval_diff(const struct timeval * const start, const struct timeval * const end)
@@ -239,12 +238,16 @@ void protoshares_process_512(blockHeader_t* block, uint32_t* collisionIndices, u
   int revalidate = 0, doublecheck = 0;
   
   uint32_t hash_counts[NUM_PARTITIONS];
-  for (int i = 0; i < NUM_PARTITIONS; i++) { hash_counts[i] = 0; }
+  for (int i = 0; i < NUM_PARTITIONS; i++) { 
+    uint32_t bin_offset = (i*(MAX_MOMENTUM_NONCE/NUM_PARTITIONS))*PARTITION_START_OFFSET;
+    hash_counts[i] = bin_offset;
+  }
   
 #if TIMING_DEBUG
   struct timeval tv_start, tv_end, tv_scan_end;
   gettimeofday(&tv_start, NULL);
 #endif
+
 
   for (uint32_t n = 0; n < MAX_MOMENTUM_NONCE; n+= BIRTHDAYS_PER_HASH) {
     SHA512_Final_Shift(&c512_avxsse, n, (uint8_t *)resultHash);
@@ -261,11 +264,10 @@ void protoshares_process_512(blockHeader_t* block, uint32_t* collisionIndices, u
     uint32_t bin_offset = (bin*(MAX_MOMENTUM_NONCE/NUM_PARTITIONS))*PARTITION_START_OFFSET;
     int binlimit = hash_counts[bin];
     //    printf("bin %d at %lu has %d hashes\n", bin, bin_offset, hash_counts[bin]); fflush(stdout);
-    for (uint32_t i = 0; i < binlimit; i++) {
-      uint32_t binloc = i + bin_offset;
+    for (uint32_t binloc = bin_offset; binloc < binlimit; binloc++) {
 
 #define N_PREFETCH 8
-      if ((i+N_PREFETCH) < binlimit) {
+      if ((binloc+N_PREFETCH) < binlimit) {
 	uint64_t prefetchAddress = hashMap[binloc+N_PREFETCH] >> (64 - COLLISION_TABLE_BITS);
 	__builtin_prefetch(&collisionIndices[prefetchAddress]);
       }
@@ -290,7 +292,7 @@ void protoshares_process_512(blockHeader_t* block, uint32_t* collisionIndices, u
 	}
       }
 
-      collisionIndices[birthday] = collisionKey | i;
+      collisionIndices[birthday] = collisionKey | (binloc - bin_offset);
     }
   }
   //  printf("reval: %d  doublecheck: %d\n", revalidate, doublecheck);
