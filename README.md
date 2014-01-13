@@ -26,8 +26,15 @@ ptsminer <payment-addr> <#threads> [mode]
 If you want AVX2, you'll have to specificy it explicitly in the mode string.
 
 Known bugs:
-- Is not happy on AMD right now.
 - Will not do AVX2 on MacOS
+- It yells if you haven't enabled hugepages on Linux, but runs properly.
+
+To silence that, run hugepages:
+```
+  echo 2048 > /proc/sys/vm/nr_hugepages
+```
+
+It will give you a moderate speed boost.
 
 Donations appreciated:
  - PTS: Pr8cnhz5eDsUegBZD4VZmGDARcKaozWbBc
