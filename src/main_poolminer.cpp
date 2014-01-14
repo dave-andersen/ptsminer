@@ -22,9 +22,9 @@
 #include <windows.h>
 #endif
 
-#define VERSION_MAJOR 0
-#define VERSION_MINOR 7
-#define VERSION_EXT "RC2 <experimental>"
+#define VERSION_MAJOR 1
+#define VERSION_MINOR 0
+#define VERSION_EXT "dga-opt beta 1"
 
 #define MAX_THREADS 64
 
